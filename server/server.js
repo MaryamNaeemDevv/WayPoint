@@ -2,17 +2,8 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { init } = require('./lib/db');
-const { Router, sendJSON } = require('./lib/http');
-
-const authRoutes = require('./routes/auth');
-const userRoutes = require('./routes/users');
-const projectRoutes = require('./routes/projects');
-const taskRoutes = require('./routes/tasks');
-const notificationRoutes = require('./routes/notifications');
-const dashboardRoutes = require('./routes/dashboard');
-const reportsRoutes = require('./routes/reports');
-const searchRoutes = require('./routes/search');
+const { sendJSON } = require('./lib/http');
+const { getRouter, deadlineSweep } = require('./app');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MIME = {
@@ -53,17 +44,7 @@ function serveStatic(req, res, pathname) {
 
 async function start() {
   // Wait for tables to exist before accepting any requests
-  await init();
-
-  const router = new Router();
-  authRoutes.register(router);
-  userRoutes.register(router);
-  projectRoutes.register(router);
-  taskRoutes.register(router);
-  notificationRoutes.register(router);
-  dashboardRoutes.register(router);
-  reportsRoutes.register(router);
-  searchRoutes.register(router);
+  const router = await getRouter();
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
@@ -86,7 +67,6 @@ async function start() {
   });
 
   // Deadline sweep: run on boot and then every hour
-  const { deadlineSweep } = dashboardRoutes;
   await deadlineSweep();
   setInterval(() => {
     deadlineSweep().catch((err) => console.error('Deadline sweep failed:', err));
