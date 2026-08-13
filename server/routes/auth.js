@@ -29,15 +29,15 @@ function register(router) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return sendJSON(res, 400, { error: 'Please enter a valid email address.' });
     }
-    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    const existing = await db.prepare('SELECT id FROM users WHERE email = ?').get(email);
     if (existing) return sendJSON(res, 409, { error: 'An account with this email already exists.' });
 
     const hash = hashPassword(password);
-    const info = db.prepare(
+    const info = await db.prepare(
       'INSERT INTO users (name, email, password_hash, role, avatar_color) VALUES (?, ?, ?, ?, ?)'
     ).run(name, email, hash, 'TEAM_MEMBER', pickColor());
 
-    const user = db.prepare('SELECT id, name, email, role, avatar_color, title FROM users WHERE id = ?').get(info.lastInsertRowid);
+    const user = await db.prepare('SELECT id, name, email, role, avatar_color, title FROM users WHERE id = ?').get(info.lastInsertRowid);
     const token = sign({ id: user.id, role: user.role, name: user.name, email: user.email });
     setAuthCookie(res, token);
     sendJSON(res, 201, { user });
@@ -49,7 +49,7 @@ function register(router) {
     const password = body.password || '';
     if (!email || !password) return sendJSON(res, 400, { error: 'Email and password are required.' });
 
-    const row = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    const row = await db.prepare('SELECT * FROM users WHERE email = ?').get(email);
     if (!row || !verifyPassword(password, row.password_hash)) {
       return sendJSON(res, 401, { error: 'Invalid email or password.' });
     }
@@ -68,7 +68,7 @@ function register(router) {
   });
 
   router.get('/api/auth/me', async (req, res) => {
-    const user = requireAuth(req, res);
+    const user = await requireAuth(req, res);
     if (!user) return;
     sendJSON(res, 200, { user });
   });

@@ -7,7 +7,7 @@ const BURNDOWN_DAYS = 30;
 
 function register(router) {
   router.get('/api/reports', async (req, res) => {
-    const user = requireAuth(req, res);
+    const user = await requireAuth(req, res);
     if (!user) return;
     if (!['ADMIN', 'PROJECT_MANAGER'].includes(user.role)) {
       return sendJSON(res, 403, { error: 'Reports are available to administrators and project managers.' });
@@ -15,9 +15,9 @@ function register(router) {
 
     let projects;
     if (user.role === 'ADMIN') {
-      projects = db.prepare('SELECT * FROM projects').all();
+      projects = await db.prepare('SELECT * FROM projects').all();
     } else {
-      projects = db.prepare('SELECT * FROM projects WHERE manager_id = ?').all(user.id);
+      projects = await db.prepare('SELECT * FROM projects WHERE manager_id = ?').all(user.id);
     }
     const projectIds = projects.map((p) => p.id);
     const projectMap = {};
@@ -36,7 +36,7 @@ function register(router) {
     }
 
     const placeholders = projectIds.map(() => '?').join(',');
-    const tasks = db.prepare(`SELECT * FROM tasks WHERE project_id IN (${placeholders})`).all(...projectIds);
+    const tasks = await db.prepare(`SELECT * FROM tasks WHERE project_id IN (${placeholders})`).all(...projectIds);
 
     // Burndown: cumulative tasks completed per day over the trailing window, vs. total scope.
     const today = new Date();
@@ -50,14 +50,14 @@ function register(router) {
     const completedByDay = {};
     tasks.forEach((t) => {
       if (t.status === 'COMPLETED' && t.updated_at) {
-        const day = t.updated_at.slice(0, 10);
+        const day = new Date(t.updated_at).toISOString().slice(0, 10);
         completedByDay[day] = (completedByDay[day] || 0) + 1;
       }
     });
     const totalTasks = tasks.length;
     let cumulative = 0;
     // Count completions that happened before the window starts, so the window's starting "remaining" is accurate.
-    const beforeWindow = tasks.filter((t) => t.status === 'COMPLETED' && t.updated_at && t.updated_at.slice(0, 10) < days[0]).length;
+    const beforeWindow = tasks.filter((t) => t.status === 'COMPLETED' && t.updated_at && new Date(t.updated_at).toISOString().slice(0, 10) < days[0]).length;
     cumulative = beforeWindow;
     const burndown = days.map((day) => {
       cumulative += completedByDay[day] || 0;
@@ -66,8 +66,8 @@ function register(router) {
 
     // Workload: per-assignee breakdown by status, scoped to this manager's/admin's projects
     const assigneeIds = [...new Set(tasks.filter((t) => t.assignee_id).map((t) => t.assignee_id))];
-    let workload = assigneeIds.map((id) => {
-      const u = db.prepare('SELECT id, name, avatar_color, title FROM users WHERE id = ?').get(id);
+    let workload = (await Promise.all(assigneeIds.map(async (id) => {
+      const u = await db.prepare('SELECT id, name, avatar_color, title FROM users WHERE id = ?').get(id);
       const own = tasks.filter((t) => t.assignee_id === id);
       return {
         user: u,
@@ -78,7 +78,7 @@ function register(router) {
         completed: own.filter((t) => t.status === 'COMPLETED').length,
         overdue: own.filter((t) => t.due_date && t.due_date < today.toISOString().slice(0, 10) && t.status !== 'COMPLETED').length,
       };
-    }).filter((w) => w.user);
+    }))).filter((w) => w.user);
     workload.sort((a, b) => b.total - a.total);
 
     const unassignedCount = tasks.filter((t) => !t.assignee_id).length;

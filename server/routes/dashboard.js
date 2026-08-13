@@ -5,22 +5,24 @@ const { requireAuth, notify } = require('../lib/middleware');
 
 function register(router) {
   router.get('/api/dashboard', async (req, res) => {
-    const user = requireAuth(req, res);
+    const user = await requireAuth(req, res);
     if (!user) return;
 
     if (user.role === 'ADMIN') {
-      const totalUsers = db.prepare('SELECT COUNT(*) c FROM users').get().c;
-      const totalProjects = db.prepare('SELECT COUNT(*) c FROM projects').get().c;
-      const activeProjects = db.prepare("SELECT COUNT(*) c FROM projects WHERE status = 'ACTIVE'").get().c;
-      const completedProjects = db.prepare("SELECT COUNT(*) c FROM projects WHERE status = 'COMPLETED'").get().c;
-      const totalTasks = db.prepare('SELECT COUNT(*) c FROM tasks').get().c;
-      const completedTasks = db.prepare("SELECT COUNT(*) c FROM tasks WHERE status = 'COMPLETED'").get().c;
-      const usersByRole = db.prepare('SELECT role, COUNT(*) c FROM users GROUP BY role').all();
-      const projectsByStatus = db.prepare('SELECT status, COUNT(*) c FROM projects GROUP BY status').all();
-      const recentProjects = db.prepare('SELECT * FROM projects ORDER BY created_at DESC LIMIT 6').all();
-      const overdue = db.prepare(`
+      const totalUsers = Number((await db.prepare('SELECT COUNT(*) c FROM users').get()).c);
+      const totalProjects = Number((await db.prepare('SELECT COUNT(*) c FROM projects').get()).c);
+      const activeProjects = Number((await db.prepare("SELECT COUNT(*) c FROM projects WHERE status = 'ACTIVE'").get()).c);
+      const completedProjects = Number((await db.prepare("SELECT COUNT(*) c FROM projects WHERE status = 'COMPLETED'").get()).c);
+      const totalTasks = Number((await db.prepare('SELECT COUNT(*) c FROM tasks').get()).c);
+      const completedTasks = Number((await db.prepare("SELECT COUNT(*) c FROM tasks WHERE status = 'COMPLETED'").get()).c);
+      const usersByRoleRaw = await db.prepare('SELECT role, COUNT(*) c FROM users GROUP BY role').all();
+      const usersByRole = usersByRoleRaw.map((r) => ({ role: r.role, c: Number(r.c) }));
+      const projectsByStatusRaw = await db.prepare('SELECT status, COUNT(*) c FROM projects GROUP BY status').all();
+      const projectsByStatus = projectsByStatusRaw.map((r) => ({ status: r.status, c: Number(r.c) }));
+      const recentProjects = await db.prepare('SELECT * FROM projects ORDER BY created_at DESC LIMIT 6').all();
+      const overdue = await db.prepare(`
         SELECT t.*, p.name as project_name FROM tasks t JOIN projects p ON p.id = t.project_id
-        WHERE t.due_date IS NOT NULL AND t.due_date < date('now') AND t.status != 'COMPLETED'
+        WHERE t.due_date IS NOT NULL AND t.due_date < CURRENT_DATE::text AND t.status != 'COMPLETED'
         ORDER BY t.due_date ASC LIMIT 10
       `).all();
       return sendJSON(res, 200, {
@@ -31,12 +33,12 @@ function register(router) {
     }
 
     if (user.role === 'PROJECT_MANAGER') {
-      const myProjects = db.prepare('SELECT * FROM projects WHERE manager_id = ? ORDER BY created_at DESC').all(user.id);
+      const myProjects = await db.prepare('SELECT * FROM projects WHERE manager_id = ? ORDER BY created_at DESC').all(user.id);
       const projectIds = myProjects.map((p) => p.id);
       let tasks = [];
       if (projectIds.length) {
         const placeholders = projectIds.map(() => '?').join(',');
-        tasks = db.prepare(`SELECT * FROM tasks WHERE project_id IN (${placeholders})`).all(...projectIds);
+        tasks = await db.prepare(`SELECT * FROM tasks WHERE project_id IN (${placeholders})`).all(...projectIds);
       }
       const totalTasks = tasks.length;
       const completedTasks = tasks.filter((t) => t.status === 'COMPLETED').length;
@@ -48,9 +50,11 @@ function register(router) {
         .sort((a, b) => (a.due_date > b.due_date ? 1 : -1))
         .slice(0, 8)
         .map((t) => ({ ...t, project_name: (myProjects.find((p) => p.id === t.project_id) || {}).name }));
-      const teamSize = projectIds.length
-        ? db.prepare(`SELECT COUNT(DISTINCT user_id) c FROM project_members WHERE project_id IN (${projectIds.map(() => '?').join(',')})`).get(...projectIds).c
-        : 0;
+      let teamSize = 0;
+      if (projectIds.length) {
+        const teamSizeRow = await db.prepare(`SELECT COUNT(DISTINCT user_id) c FROM project_members WHERE project_id IN (${projectIds.map(() => '?').join(',')})`).get(...projectIds);
+        teamSize = Number(teamSizeRow.c);
+      }
       return sendJSON(res, 200, {
         role: 'PROJECT_MANAGER',
         stats: {
@@ -64,22 +68,22 @@ function register(router) {
     }
 
     // TEAM_MEMBER
-    const myTasks = db.prepare('SELECT * FROM tasks WHERE assignee_id = ?').all(user.id);
-    const myProjects = db.prepare(`
+    const myTasks = await db.prepare('SELECT * FROM tasks WHERE assignee_id = ?').all(user.id);
+    const myProjects = await db.prepare(`
       SELECT p.* FROM projects p JOIN project_members pm ON pm.project_id = p.id WHERE pm.user_id = ?
       ORDER BY p.created_at DESC
     `).all(user.id);
     const totalTasks = myTasks.length;
     const completedTasks = myTasks.filter((t) => t.status === 'COMPLETED').length;
     const pendingTasks = totalTasks - completedTasks;
-    const upcoming = myTasks
+    const dueSoonTasks = myTasks
       .filter((t) => t.due_date && t.status !== 'COMPLETED')
       .sort((a, b) => (a.due_date > b.due_date ? 1 : -1))
-      .slice(0, 8)
-      .map((t) => {
-        const proj = db.prepare('SELECT name FROM projects WHERE id = ?').get(t.project_id);
-        return { ...t, project_name: proj ? proj.name : '' };
-      });
+      .slice(0, 8);
+    const upcoming = await Promise.all(dueSoonTasks.map(async (t) => {
+      const proj = await db.prepare('SELECT name FROM projects WHERE id = ?').get(t.project_id);
+      return { ...t, project_name: proj ? proj.name : '' };
+    }));
     return sendJSON(res, 200, {
       role: 'TEAM_MEMBER',
       stats: { totalTasks, completedTasks, pendingTasks, totalProjects: myProjects.length },
@@ -90,18 +94,18 @@ function register(router) {
 }
 
 /** Sweep for tasks due within 48h and notify assignees once per day (dedup via message check). */
-function deadlineSweep() {
+async function deadlineSweep() {
   try {
-    const soon = db.prepare(`
+    const soon = await db.prepare(`
       SELECT t.*, p.name as project_name FROM tasks t JOIN projects p ON p.id = t.project_id
       WHERE t.assignee_id IS NOT NULL AND t.status != 'COMPLETED'
       AND t.due_date IS NOT NULL
-      AND date(t.due_date) <= date('now', '+2 day') AND date(t.due_date) >= date('now')
+      AND t.due_date::date <= (CURRENT_DATE + INTERVAL '2 day')::date AND t.due_date::date >= CURRENT_DATE
     `).all();
     for (const t of soon) {
-      const already = db.prepare(`
+      const already = await db.prepare(`
         SELECT id FROM notifications WHERE user_id = ? AND type = 'DEADLINE_APPROACHING'
-        AND message LIKE ? AND date(created_at) = date('now')
+        AND message LIKE ? AND created_at::date = CURRENT_DATE
       `).get(t.assignee_id, `%"${t.title}"%`);
       if (!already) {
         notify(t.assignee_id, 'DEADLINE_APPROACHING', `Task "${t.title}" in "${t.project_name}" is due soon (${t.due_date}).`, `#/projects/${t.project_id}?task=${t.id}`);

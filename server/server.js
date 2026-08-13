@@ -5,8 +5,6 @@ const path = require('path');
 const { init } = require('./lib/db');
 const { Router, sendJSON } = require('./lib/http');
 
-init();
-
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const projectRoutes = require('./routes/projects');
@@ -15,16 +13,6 @@ const notificationRoutes = require('./routes/notifications');
 const dashboardRoutes = require('./routes/dashboard');
 const reportsRoutes = require('./routes/reports');
 const searchRoutes = require('./routes/search');
-
-const router = new Router();
-authRoutes.register(router);
-userRoutes.register(router);
-projectRoutes.register(router);
-taskRoutes.register(router);
-notificationRoutes.register(router);
-dashboardRoutes.register(router);
-reportsRoutes.register(router);
-searchRoutes.register(router);
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const MIME = {
@@ -63,27 +51,49 @@ function serveStatic(req, res, pathname) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://localhost');
-  const pathname = url.pathname;
+async function start() {
+  // Wait for tables to exist before accepting any requests
+  await init();
 
-  if (pathname.startsWith('/api/')) {
-    const handled = await router.handle(req, res, pathname);
-    if (!handled && !res.writableEnded) {
-      sendJSON(res, 404, { error: 'API endpoint not found.' });
+  const router = new Router();
+  authRoutes.register(router);
+  userRoutes.register(router);
+  projectRoutes.register(router);
+  taskRoutes.register(router);
+  notificationRoutes.register(router);
+  dashboardRoutes.register(router);
+  reportsRoutes.register(router);
+  searchRoutes.register(router);
+
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    const pathname = url.pathname;
+
+    if (pathname.startsWith('/api/')) {
+      const handled = await router.handle(req, res, pathname);
+      if (!handled && !res.writableEnded) {
+        sendJSON(res, 404, { error: 'API endpoint not found.' });
+      }
+      return;
     }
-    return;
-  }
 
-  serveStatic(req, res, pathname);
+    serveStatic(req, res, pathname);
+  });
+
+  const PORT = process.env.PORT || 3000;
+  server.listen(PORT, () => {
+    console.log(`TaskFlow server running at http://localhost:${PORT}`);
+  });
+
+  // Deadline sweep: run on boot and then every hour
+  const { deadlineSweep } = dashboardRoutes;
+  await deadlineSweep();
+  setInterval(() => {
+    deadlineSweep().catch((err) => console.error('Deadline sweep failed:', err));
+  }, 1000 * 60 * 60);
+}
+
+start().catch((err) => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
 });
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`TaskFlow server running at http://localhost:${PORT}`);
-});
-
-// Deadline sweep: run on boot and then every hour
-const { deadlineSweep } = dashboardRoutes;
-deadlineSweep();
-setInterval(deadlineSweep, 1000 * 60 * 60);

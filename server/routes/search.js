@@ -7,7 +7,7 @@ const RESULT_LIMIT = 6;
 
 function register(router) {
   router.get('/api/search', async (req, res) => {
-    const user = requireAuth(req, res);
+    const user = await requireAuth(req, res);
     if (!user) return;
     const url = new URL(req.url, 'http://localhost');
     const q = (url.searchParams.get('q') || '').trim();
@@ -17,17 +17,17 @@ function register(router) {
     // Projects — scoped the same way as GET /api/projects
     let projectRows;
     if (user.role === 'ADMIN') {
-      projectRows = db.prepare(`
+      projectRows = await db.prepare(`
         SELECT * FROM projects WHERE lower(name) LIKE ? OR lower(description) LIKE ?
         ORDER BY created_at DESC LIMIT ?
       `).all(like, like, RESULT_LIMIT);
     } else if (user.role === 'PROJECT_MANAGER') {
-      projectRows = db.prepare(`
+      projectRows = await db.prepare(`
         SELECT * FROM projects WHERE manager_id = ? AND (lower(name) LIKE ? OR lower(description) LIKE ?)
         ORDER BY created_at DESC LIMIT ?
       `).all(user.id, like, like, RESULT_LIMIT);
     } else {
-      projectRows = db.prepare(`
+      projectRows = await db.prepare(`
         SELECT p.* FROM projects p JOIN project_members pm ON pm.project_id = p.id
         WHERE pm.user_id = ? AND (lower(p.name) LIKE ? OR lower(p.description) LIKE ?)
         ORDER BY p.created_at DESC LIMIT ?
@@ -37,17 +37,17 @@ function register(router) {
     // Tasks — scoped the same way as GET /api/tasks
     let taskRows;
     if (user.role === 'ADMIN') {
-      taskRows = db.prepare(`
+      taskRows = await db.prepare(`
         SELECT t.*, p.name as project_name FROM tasks t JOIN projects p ON p.id = t.project_id
         WHERE lower(t.title) LIKE ? ORDER BY t.created_at DESC LIMIT ?
       `).all(like, RESULT_LIMIT);
     } else if (user.role === 'PROJECT_MANAGER') {
-      taskRows = db.prepare(`
+      taskRows = await db.prepare(`
         SELECT t.*, p.name as project_name FROM tasks t JOIN projects p ON p.id = t.project_id
         WHERE p.manager_id = ? AND lower(t.title) LIKE ? ORDER BY t.created_at DESC LIMIT ?
       `).all(user.id, like, RESULT_LIMIT);
     } else {
-      taskRows = db.prepare(`
+      taskRows = await db.prepare(`
         SELECT t.*, p.name as project_name FROM tasks t JOIN projects p ON p.id = t.project_id
         WHERE t.assignee_id = ? AND lower(t.title) LIKE ? ORDER BY t.created_at DESC LIMIT ?
       `).all(user.id, like, RESULT_LIMIT);
@@ -56,7 +56,7 @@ function register(router) {
     // Users — only surfaced for admins, since the Users page (and per-user profile view) is admin-only.
     let userRows = [];
     if (user.role === 'ADMIN') {
-      userRows = db.prepare(`
+      userRows = await db.prepare(`
         SELECT id, name, email, role, avatar_color, title FROM users
         WHERE lower(name) LIKE ? OR lower(email) LIKE ? ORDER BY name ASC LIMIT ?
       `).all(like, like, RESULT_LIMIT);
