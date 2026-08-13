@@ -1,4 +1,3 @@
-require('dotenv').config();
 'use strict';
 /**
  * TaskFlow — Database layer (Postgres / Supabase version)
@@ -6,6 +5,16 @@ require('dotenv').config();
  * interface as the old node:sqlite version, but every call is now async —
  * callers must `await` them.
  */
+// dotenv is a local-dev convenience for loading a .env file into
+// process.env. Platforms like Vercel inject env vars directly into
+// process.env already, so this isn't needed there — and serverless
+// bundlers don't always trace/include it reliably. Load it best-effort
+// so a missing/un-bundled dotenv never breaks anything.
+try {
+  require('dotenv').config();
+} catch (err) {
+  // Not installed / not bundled — fine, env vars are already present.
+}
 const { Pool } = require('pg');
 
 const pool = new Pool({
