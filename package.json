@@ -1,0 +1,15 @@
+{
+  "name": "waypoint",
+  "version": "1.0.0",
+  "description": "Waypoint — Project Management & Team Collaboration Platform. Zero external dependencies: built entirely on Node.js core modules (node:http, node:sqlite, node:crypto).",
+  "private": true,
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "seed": "node server/seed.js",
+    "start": "node server/server.js",
+    "reset": "rm -f data/taskflow.db && node server/seed.js"
+  },
+  "dependencies": {}
+}
