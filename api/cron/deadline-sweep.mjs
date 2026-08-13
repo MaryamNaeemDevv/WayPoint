@@ -1,16 +1,9 @@
-'use strict';
-/**
- * Triggered by Vercel Cron (see vercel.json). Replaces the setInterval-based
- * sweep from the persistent server, since serverless functions don't stay
- * alive between requests.
- *
- * Vercel automatically injects CRON_SECRET and sends it as a Bearer token
- * on cron-triggered requests, so this checks it to stop randoms from
- * hitting the URL and spamming notifications.
- */
-const { deadlineSweep } = require('../../server/app');
+// Same ESM requirement as the catch-all function — see [...path].mjs.
+import appLib from '../../server/app.js';
 
-module.exports = async (req, res) => {
+const { deadlineSweep } = appLib;
+
+export default async function handler(req, res) {
   const expected = process.env.CRON_SECRET;
   const auth = req.headers['authorization'];
   if (expected && auth !== `Bearer ${expected}`) {
@@ -28,4 +21,4 @@ module.exports = async (req, res) => {
     res.writeHead(500, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Sweep failed' }));
   }
-};
+}
